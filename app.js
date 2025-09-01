@@ -29,7 +29,7 @@
   let connected = false;
 
   // 初始 UI
-  endpointInput.value = CONFIG.mjpegUrl;
+  endpointInput.value = cleanUrl(CONFIG.mjpegUrl);
   modeLabel.textContent = "MJPEG";
   setState("idle");
   setStatus("尚未連線", "warn");
@@ -229,17 +229,21 @@
     updateButtons();
   }
   async function playMJPEG() {
-    const src =
+    const raw =
       (endpointInput.value && endpointInput.value.trim()) || CONFIG.mjpegUrl;
+    const src = cleanUrl(raw);
+
+    if (endpointInput.value !== src) endpointInput.value = src;
+
     if (!src) throw new Error("未提供 MJPEG 端點");
-    // HTTPS 頁面去載 HTTP 會被擋
     if (location.protocol === "https:" && src.startsWith("http://")) {
       throw new Error(
-        "本頁是 HTTPS，MJPEG 是 HTTP，瀏覽器已阻擋（Mixed Content）。請改用相同的 HTTPS 來源或走反向代理。"
+        "本頁為 HTTPS,但串流是 HTTP,已被瀏覽器阻擋（Mixed Content）。請改用 HTTPS 串流或反向代理。"
       );
     }
+
     mjpegEl.style.display = "block";
-    mjpegEl.src = src; // 直接用 src
+    mjpegEl.src = src;
     playing = true;
     showPaused(false);
     updateButtons();
@@ -320,5 +324,16 @@
   function getParam(key, fallback = "") {
     const v = new URLSearchParams(location.search).get(key);
     return v ?? fallback;
+  }
+  function cleanUrl(s) {
+    if (!s) return "";
+    s = s.trim();
+    // 去掉前後各種直/彎引號與反引號
+    s = s
+      .replace(/^[`'"\u2018\u2019\u201C\u201D]+/, "")
+      .replace(/[`'"\u2018\u2019\u201C\u201D]+$/, "");
+    // 去掉結尾逗號或分號（常見貼上殘留）
+    s = s.replace(/[;,]+$/, "");
+    return s;
   }
 })();

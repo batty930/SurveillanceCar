@@ -102,25 +102,35 @@ main {
   position: relative;
   overflow: hidden;
   border-radius: var(--radius);
-}
-.video-stage {
-  position: absolute;
-  display: grid;
-  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: #000;
-  aspect-ratio: 16 / 9;
+  box-shadow: var(--shadow);
 }
+
+.video-stage {
+  position: relative;
+  width: 100%;
+  background: #000;
+  display: block;
+}
+.video-stage::before {
+  content: "";
+  display: block;
+  padding-top: var(--ar, 56.25%);
+}
+
 video,
 img#mjpegEl {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   object-position: center;
   display: block;
   background: #000;
 }
+
 .overlay {
   position: absolute;
   inset: 0;
