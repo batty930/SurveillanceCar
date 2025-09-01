@@ -119,10 +119,11 @@
 
   // 反映當前幀
   mjpegEl.addEventListener("load", () => {
-    resLabel.textContent = `${mjpegEl.naturalWidth || "—"}x${
-      mjpegEl.naturalHeight || "—"
-    }`;
-    setStatus("正常", "ok");
+    const w = mjpegEl.naturalWidth || 16;
+    const h = mjpegEl.naturalHeight || 9;
+    document.querySelector(".video-stage").style.aspectRatio = `${w} / ${h}`;
+    resLabel.textContent = `${w}x${h}`;
+    setStatus("串流正常", "ok");
   });
 
   mjpegEl.addEventListener("error", () => {
