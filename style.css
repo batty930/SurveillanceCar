@@ -219,5 +219,6 @@ img#mjpegEl {
   background: linear-gradient(180deg, #ef4444, #b91c1c);
   border-color: #991b1b;
   color: #fff;
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 12px;
 }
