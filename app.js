@@ -1,13 +1,18 @@
 (() => {
+  // ===== Config & Defaults =====
+  const DEFAULT_MJPEG = "http://192.168.0.131:8000/stream";
   const CONFIG = {
     mode: "mjpeg",
-    mjpegUrl: getParam("mjpeg", "'http://192.168.0.131:8000/stream'"), //MJPEG串流網址
-    controlWs: "", // 如果有遙控 WebSocket URL 可以填在這裡
-    apiBase: "", // 如果有提供截圖 API，可以填 base URL
-    authToken: "", // 如果需要 token 驗證可以放這裡
+    mjpegUrl:
+      getParam("mjpeg", "") ||
+      localStorage.getItem("mjpegUrl") ||
+      DEFAULT_MJPEG,
+    controlWs: "",
+    apiBase: "",
+    authToken: "",
   };
 
-  // DOM 參照
+  //DOM
   const dot = document.getElementById("dot");
   const statusEl = document.getElementById("status");
   const stateLabel = document.getElementById("stateLabel");
@@ -22,14 +27,23 @@
   const endpointInput = document.getElementById("endpointInput");
   const padBtns = document.querySelectorAll(".pad-btn");
   const snapBtn = document.getElementById("snapBtn");
+  const galleryEl = document.getElementById("gallery");
+  const galleryCountEl = document.getElementById("galleryCount");
+  const clearGalleryBtn = document.getElementById("clearGalleryBtn");
 
-  // 狀態
-  let ctrl = null; // Control WebSocket
-  let playing = false; // 是否正在播放 MJPEG
+  //狀態
+  let ctrl = null;
+  let playing = false;
   let connected = false;
+  const gallery = []; // { id, url, blob, ts }
+  let nextId = 1;
 
-  // 初始 UI
-  endpointInput.value = cleanUrl(CONFIG.mjpegUrl);
+  //初始 UI
+  endpointInput.value = cleanUrl(CONFIG.mjpegUrl || "");
+  endpointInput.addEventListener("change", () => {
+    endpointInput.value = cleanUrl(endpointInput.value);
+    localStorage.setItem("mjpegUrl", endpointInput.value);
+  });
   modeLabel.textContent = "MJPEG";
   setState("idle");
   setStatus("尚未連線", "warn");
@@ -48,14 +62,9 @@
 
   playPauseBtn.addEventListener("click", async () => {
     try {
-      if (!connected) {
-        await connect();
-      }
-      if (playing) {
-        stopMJPEG();
-      } else {
-        await playMJPEG();
-      }
+      if (!connected) await connect();
+      if (playing) stopMJPEG();
+      else await playMJPEG();
     } catch (err) {
       setError(err);
     }
@@ -67,57 +76,7 @@
     else document.exitFullscreen?.();
   });
 
-  //連線按鈕
-  connectBtn.addEventListener("click", async () => {
-    try {
-      await connect();
-    } catch (err) {
-      setError(err);
-    }
-  });
-
-  //播放/暫停 按鈕
-  playPauseBtn.addEventListener("click", async () => {
-    try {
-      if (!connected) {
-        await connect();
-      } // 沒連線就先連線
-      if (currentMode === "mjpeg") {
-        if (playing) {
-          mjpegEl.src = "";
-          playing = false;
-          showPaused(true);
-        } else {
-          mjpegEl.src = endpointInput.value = CONFIG.mjpegUrl;
-          playing = true;
-          showPaused(false);
-        }
-        updateButtons();
-        return;
-      }
-      if (videoEl.paused) {
-        await videoEl.play();
-        playing = true;
-        showPaused(false);
-      } else {
-        videoEl.pause();
-        playing = false;
-        showPaused(true);
-      }
-      updateButtons();
-    } catch (err) {
-      setError(err);
-    }
-  });
-
-  //全螢幕按鈕
-  fsBtn.addEventListener("click", () => {
-    const card = document.querySelector(".video-card");
-    if (!document.fullscreenElement) card.requestFullscreen?.();
-    else document.exitFullscreen?.();
-  });
-
-  // 反映當前幀
+  //當前幀載入/失敗
   mjpegEl.addEventListener("load", () => {
     const w = mjpegEl.naturalWidth || 16;
     const h = mjpegEl.naturalHeight || 9;
@@ -125,10 +84,10 @@
     resLabel.textContent = `${w}x${h}`;
     setStatus("串流正常", "ok");
   });
-
   mjpegEl.addEventListener("error", () => {
     setError(new Error("MJPEG載入失敗,請檢查端點或 token"));
   });
+
   //遙控按鈕
   padBtns.forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -161,103 +120,102 @@
     }
   });
 
-  //截圖
+  //截圖加入圖庫
   snapBtn.addEventListener("click", async () => {
-    if (!CONFIG.apiBase) return alert("未設定 API Base");
     try {
-      const url = withToken(
-        CONFIG.apiBase.replace(/\/?$/, "") + "/snapshot",
-        CONFIG.authToken
-      );
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) throw new Error("截圖失敗");
-      const blob = await res.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      //下載成圖片檔
-      a.download = `snapshot_${Date.now()}.jpg`;
-      a.click();
-      setStatus("已取得截圖", "ok");
+      const blob = await takeSnapshotBlob(); // 可能是 API 或 Canvas
+      await addToGallery(blob);
+      setStatus("已加入圖庫", "ok");
     } catch (e) {
       setError(e);
     }
   });
 
-  //頁面離開前清理資源
+  clearGalleryBtn?.addEventListener("click", () => {
+    while (gallery.length) {
+      const it = gallery.pop();
+      try {
+        URL.revokeObjectURL(it.url);
+      } catch {}
+    }
+    galleryEl.innerHTML = "";
+    galleryCountEl.textContent = "(0)";
+  });
+
+  //離開清理
   window.addEventListener("beforeunload", teardown);
 
-  //主要流程
   async function connect() {
     setState("connecting");
     setStatus("連線中…", "warn");
-
-    // 建立 Control WebSocket（有設置才連）
-    if (CONFIG.controlWs) {
-      try {
-        if (ctrl && ctrl.readyState === 1) {
-          /* 已連線 */
-        } else {
-          if (ctrl) {
-            try {
-              ctrl.close();
-            } catch {}
-          }
-          const wsUrl = withToken(CONFIG.controlWs, CONFIG.authToken);
-          ctrl = new WebSocket(wsUrl);
-          ctrl.addEventListener("open", () => {
-            setStatus("控制通道已連線", "ok");
-          });
-          ctrl.addEventListener("close", () => {
-            setStatus("控制通道已關閉", "warn");
-          });
-          ctrl.addEventListener("error", () => {
-            setStatus("控制通道錯誤", "err");
-          });
-          ctrl.addEventListener("message", (ev) => {
-            // 可視需要處理伺服器回覆
-            // console.debug('Control <-', ev.data);
-          });
-        }
-      } catch (e) {
-        // 控制通道失敗不影響影像播放
-        console.warn("控制通道連線失敗：", e);
-      }
-    }
-
     connected = true;
     setState("ready");
     updateButtons();
   }
+
   async function playMJPEG() {
-    const raw =
-      (endpointInput.value && endpointInput.value.trim()) || CONFIG.mjpegUrl;
-    const src = cleanUrl(raw);
+    let base = cleanUrl(
+      endpointInput.value || CONFIG.mjpegUrl || DEFAULT_MJPEG
+    );
+    if (!base) throw new Error("未提供 MJPEG 端點");
 
-    if (endpointInput.value !== src) endpointInput.value = src;
-
-    if (!src) throw new Error("未提供 MJPEG 端點");
-    if (location.protocol === "https:" && src.startsWith("http://")) {
+    //HTTPS 頁面載 HTTP：會被擋（GitHub Pages 情境）
+    if (location.protocol === "https:" && base.startsWith("http://")) {
       throw new Error(
-        "本頁為 HTTPS,但串流是 HTTP,已被瀏覽器阻擋（Mixed Content）。請改用 HTTPS 串流或反向代理。"
+        "Mixed Content：本頁是 HTTPS，但串流是 HTTP。請改用同網域 HTTPS（反向代理/Tunnel），或用 HTTP 開此頁。"
       );
     }
 
+    //cache-busting 避免連老連線
+    const src = base + (base.includes("?") ? "&" : "?") + "ts=" + Date.now();
+
+    //顯示 IMG
+    mjpegEl.removeAttribute("crossorigin"); // 不碰 CORS，避免直接載入失敗
     mjpegEl.style.display = "block";
+
+    mjpegEl.onload = () => {
+      resLabel.textContent = `${mjpegEl.naturalWidth || "—"}x${
+        mjpegEl.naturalHeight || "—"
+      }`;
+      setStatus("串流正常", "ok");
+      playing = true;
+      showPaused(false);
+      updateButtons();
+      localStorage.setItem("mjpegUrl", base); //記住可用端點
+    };
+    mjpegEl.onload = () => {
+      resLabel.textContent = `${mjpegEl.naturalWidth || "—"}x${
+        mjpegEl.naturalHeight || "—"
+      }`;
+      setStatus("串流正常", "ok");
+      playing = true;
+      showPaused(false);
+      updateButtons();
+      localStorage.setItem("mjpegUrl", base); //記住可用端點
+    };
+    mjpegEl.onerror = () => {
+      setError(new Error("MJPEG載入失敗,請檢查端點或 token"));
+      playing = false;
+      showPaused(true);
+      updateButtons();
+    };
+
+    //觸發載入
     mjpegEl.src = src;
-    playing = true;
-    showPaused(false);
+    connected = true;
+    setState("ready");
+    setStatus("串流連線中…", "warn");
     updateButtons();
   }
 
   function stopMJPEG() {
-    mjpegEl.src = ""; // 清空即可停止拉流
+    mjpegEl.src = "";
     playing = false;
     showPaused(true);
     setStatus("已暫停", "warn");
     updateButtons();
   }
 
-  // 清理資源
   function teardown() {
     playing = false;
     connected = false;
@@ -269,8 +227,106 @@
     showPaused(false);
     updateButtons();
   }
+  //Snapshot (API 優先；否則 Canvas，需要同源或 CORS)
+  async function takeSnapshotBlob() {
+    if (CONFIG.apiBase) {
+      const url = CONFIG.apiBase.replace(/\/?$/, "") + "/snapshot";
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) throw new Error(`截圖失敗（${res.status}）`);
+      return await res.blob();
+    }
 
-  //控制通訊
+    if (!mjpegEl.naturalWidth)
+      throw new Error("目前沒有影像幀可截圖（請先連線播放）");
+
+    // 不主動設定 crossOrigin，避免影像顯示被毀；若來源允許 CORS 同樣可以成功
+    const canvas = document.createElement("canvas");
+    canvas.width = mjpegEl.naturalWidth;
+    canvas.height = mjpegEl.naturalHeight;
+    const ctx = canvas.getContext("2d");
+
+    try {
+      ctx.drawImage(mjpegEl, 0, 0);
+    } catch {
+      throw new Error(
+        "無法擷取畫面：來源未允許 CORS，請改用 API 截圖或同源反向代理。"
+      );
+    }
+
+    return await new Promise((resolve, reject) =>
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("轉檔失敗"))),
+        "image/png"
+      )
+    );
+  }
+
+  async function addToGallery(blob) {
+    const url = URL.createObjectURL(blob);
+    const item = { id: nextId++, url, blob, ts: Date.now() };
+    gallery.unshift(item);
+    renderGalleryItem(item);
+    galleryCountEl.textContent = `(${gallery.length})`;
+  }
+
+  function renderGalleryItem(item) {
+    const card = document.createElement("div");
+    card.className = "gallery-item";
+    card.dataset.id = item.id;
+
+    const thumb = document.createElement("img");
+    thumb.src = item.url;
+    thumb.alt = `snapshot_${item.id}`;
+    thumb.title = new Date(item.ts).toLocaleString();
+    thumb.style.cursor = "zoom-in";
+    thumb.addEventListener("click", () => window.open(item.url, "_blank"));
+
+    const meta = document.createElement("div");
+    meta.className = "gallery-meta";
+    const time = document.createElement("div");
+    time.textContent = new Date(item.ts).toLocaleTimeString();
+
+    const actions = document.createElement("div");
+    actions.className = "gallery-actions";
+
+    const dl = document.createElement("a");
+    dl.className = "btn";
+    dl.textContent = "下載";
+    dl.download = `snapshot_${item.ts}.png`;
+    dl.href = item.url;
+
+    const rm = document.createElement("button");
+    rm.className = "btn";
+    rm.textContent = "刪除";
+    rm.addEventListener("click", () => removeFromGallery(item.id));
+
+    actions.append(dl, rm);
+    meta.append(time, actions);
+    card.append(thumb, meta);
+
+    if (galleryEl.firstChild)
+      galleryEl.insertBefore(card, galleryEl.firstChild);
+    else galleryEl.appendChild(card);
+
+    const MAX = 50;
+    if (gallery.length > MAX) {
+      const old = gallery.pop();
+      removeFromGallery(old.id);
+    }
+  }
+  function removeFromGallery(id) {
+    const idx = gallery.findIndex((it) => it.id === id);
+    if (idx === -1) return;
+    const [it] = gallery.splice(idx, 1);
+    const node = galleryEl.querySelector(`.gallery-item[data-id="${id}"]`);
+    if (node) node.remove();
+    try {
+      URL.revokeObjectURL(it.url);
+    } catch {}
+    galleryCountEl.textContent = `(${gallery.length})`;
+  }
+
+  //Control WS
   function sendControl(type, payload = {}) {
     if (!ctrl || ctrl.readyState !== 1) {
       setStatus("控制通道未連線", "warn");
@@ -279,7 +335,7 @@
     safeSend(ctrl, { type, ...payload });
   }
 
-  // UI工具
+  //UI Utils
   function setState(s) {
     stateLabel.textContent = s;
   }
@@ -296,7 +352,7 @@
     pausedOverlay.style.display = show ? "grid" : "none";
   }
   function updateButtons() {
-    const enabled = connected || true; // 允許先按播放以觸發連線
+    const enabled = connected || true;
     playPauseBtn.disabled = !enabled;
     fsBtn.disabled = !enabled;
     connectBtn.textContent = connected
@@ -327,12 +383,10 @@
   }
   function cleanUrl(s) {
     if (!s) return "";
-    s = s.trim();
-    // 去掉前後各種直/彎引號與反引號
+    s = ("" + s).trim();
     s = s
       .replace(/^[`'"\u2018\u2019\u201C\u201D]+/, "")
       .replace(/[`'"\u2018\u2019\u201C\u201D]+$/, "");
-    // 去掉結尾逗號或分號（常見貼上殘留）
     s = s.replace(/[;,]+$/, "");
     return s;
   }
