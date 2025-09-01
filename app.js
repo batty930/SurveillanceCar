@@ -71,7 +71,6 @@
   connectBtn.addEventListener("click", async () => {
     try {
       await connect();
-      await playVideoIfNeeded();
     } catch (err) {
       setError(err);
     }
@@ -232,6 +231,12 @@
     const src =
       (endpointInput.value && endpointInput.value.trim()) || CONFIG.mjpegUrl;
     if (!src) throw new Error("未提供 MJPEG 端點");
+    // HTTPS 頁面去載 HTTP 會被擋
+    if (location.protocol === "https:" && src.startsWith("http://")) {
+      throw new Error(
+        "本頁是 HTTPS，MJPEG 是 HTTP，瀏覽器已阻擋（Mixed Content）。請改用相同的 HTTPS 來源或走反向代理。"
+      );
+    }
     mjpegEl.style.display = "block";
     mjpegEl.src = src; // 直接用 src
     playing = true;
