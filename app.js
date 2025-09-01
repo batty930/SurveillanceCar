@@ -2,9 +2,9 @@
   const CONFIG = {
     mode: "mjpeg",
     mjpegUrl: getParam("mjpeg", "https://your-server.example.com/stream.mjpg"), //MJPEG串流網址
-    controlWs: getParam("control", "wss://your-server.example.com/agv/control"), //遙控WebSocket
-    apiBase: getParam("api", "https://your-server.example.com/api"), // 截圖API
-    authToken: getParam("token", ""), //驗證token
+    controlWs: "", // 如果有遙控 WebSocket URL 可以填在這裡
+    apiBase: "", // 如果有提供截圖 API，可以填 base URL
+    authToken: "", // 如果需要 token 驗證可以放這裡
   };
 
   // DOM 參照
