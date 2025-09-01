@@ -1,7 +1,7 @@
 (() => {
   const CONFIG = {
     mode: "mjpeg",
-    mjpegUrl: getParam("mjpeg", "https://your-server.example.com/stream.mjpg"), //MJPEG串流網址
+    mjpegUrl: getParam("mjpeg", "'http://192.168.0.131:8000/stream'"), //MJPEG串流網址
     controlWs: "", // 如果有遙控 WebSocket URL 可以填在這裡
     apiBase: "", // 如果有提供截圖 API，可以填 base URL
     authToken: "", // 如果需要 token 驗證可以放這裡
@@ -89,7 +89,7 @@
           playing = false;
           showPaused(true);
         } else {
-          mjpegEl.src = endpointInput.value || CONFIG.mjpegUrl;
+          mjpegEl.src = endpointInput.value = CONFIG.mjpegUrl;
           playing = true;
           showPaused(false);
         }
@@ -229,10 +229,11 @@
     updateButtons();
   }
   async function playMJPEG() {
-    const src = endpointInput.value.trim() || CONFIG.mjpegUrl;
+    const src =
+      (endpointInput.value && endpointInput.value.trim()) || CONFIG.mjpegUrl;
     if (!src) throw new Error("未提供 MJPEG 端點");
     mjpegEl.style.display = "block";
-    mjpegEl.src = withToken(src, CONFIG.authToken);
+    mjpegEl.src = src; // 直接用 src
     playing = true;
     showPaused(false);
     updateButtons();
